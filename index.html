@@ -1,0 +1,941 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QueryDB</title>
+  <meta name="description" content="Upload a SQLite database or CSV file and ask questions about it in plain English — Claude turns them into SQL and runs them for you." />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230E0E10'/%3E%3Ctext x='16' y='23' font-family='Georgia, serif' font-style='italic' font-size='19' fill='%23C9A876' text-anchor='middle'%3Eq%3C/text%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
+  <style>
+    /* ─── Variables ─────────────────────────────────── */
+    :root {
+      --bg:      #0E0E10;
+      --border:  rgba(255, 255, 255, 0.08);
+      --text:    #EDEDEF;
+      --muted:   #8C8C94;
+      --accent:  #C9A876;
+      --error:   #DD9088;
+    }
+
+    /* ─── Reset ─────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+
+    /* ─── Base ───────────────────────────────────────── */
+    body {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 14px;
+      font-weight: 400;
+      background: var(--bg);
+      color: var(--text);
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ─── Grain texture (breaks up flat dark surfaces) ── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 1;
+      opacity: 0.025;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='400'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='400' height='400' filter='url(%23n)'/%3E%3C/svg%3E");
+      background-repeat: repeat;
+      background-size: 200px 200px;
+    }
+
+    /* ─── Upload screen ──────────────────────────────── */
+    #screen-upload {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      height: 100dvh;
+      padding: 24px;
+    }
+
+    .upload-zone {
+      width: 100%;
+      max-width: 460px;
+      text-align: center;
+      cursor: pointer;
+      padding: 56px 40px 64px;
+      border: 1px solid transparent;
+      transition: border-color 0.2s ease;
+    }
+
+    .upload-zone:hover,
+    .upload-zone.drag-over {
+      border-color: var(--border);
+    }
+
+    .upload-zone h1 {
+      font-family: 'Instrument Serif', serif;
+      font-size: 38px;
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      margin-bottom: 14px;
+      text-wrap: balance;
+    }
+
+    .upload-zone p {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.7;
+      margin-bottom: 36px;
+      text-wrap: pretty;
+    }
+
+    .upload-browse {
+      display: inline-block;
+      font-size: 13px;
+      color: var(--text);
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 2px;
+      cursor: pointer;
+      transition: border-color 0.2s ease, color 0.2s ease;
+    }
+
+    .upload-browse:hover {
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .upload-hint {
+      margin-top: 28px;
+      font-size: 12px;
+      color: var(--muted);
+      letter-spacing: 0.02em;
+    }
+
+    .upload-note {
+      margin-top: 6px;
+      font-size: 11px;
+      color: var(--muted);
+      opacity: 0.6;
+      line-height: 1.6;
+    }
+
+    #file-input { display: none; }
+
+    .upload-error {
+      margin-top: 20px;
+      color: var(--error);
+      font-size: 13px;
+    }
+
+    /* ─── Query screen ───────────────────────────────── */
+    #screen-query {
+      display: flex;
+      height: 100vh;
+      height: 100dvh;
+      overflow: hidden;
+    }
+
+    /* ─── Sidebar ────────────────────────────────────── */
+    #sidebar {
+      width: 280px;
+      min-width: 280px;
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      height: 100dvh;
+      overflow: hidden;
+    }
+
+    .sidebar-header {
+      padding: 28px 28px 22px;
+      flex-shrink: 0;
+    }
+
+    .sidebar-db-name {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .sidebar-db-meta {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+
+    .schema-label {
+      padding: 0 28px 10px;
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      flex-shrink: 0;
+    }
+
+    .schema-tree {
+      flex: 1;
+      overflow-y: auto;
+      padding-bottom: 20px;
+    }
+
+    /* ─── Schema tree items ──────────────────────────── */
+    .tree-table {
+      border-bottom: 1px solid var(--border);
+    }
+
+    .tree-table-header {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      padding: 12px 28px;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.15s ease;
+    }
+
+    .tree-table-header:hover {
+      background: rgba(255, 255, 255, 0.025);
+    }
+
+    .tree-table-header:hover .tree-table-name {
+      color: var(--accent);
+    }
+
+    .tree-table-header:focus-visible {
+      outline: 1px solid var(--accent);
+      outline-offset: -2px;
+    }
+
+    .tree-caret {
+      display: inline-block;
+      font-size: 12px;
+      color: var(--muted);
+      transition: transform 0.2s ease;
+      flex-shrink: 0;
+      transform: rotate(0deg);
+    }
+
+    .tree-table.open .tree-caret {
+      transform: rotate(90deg);
+    }
+
+    .tree-table-name {
+      font-size: 13px;
+      color: var(--text);
+      font-weight: 500;
+      flex: 1;
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      transition: color 0.15s ease;
+    }
+
+    .tree-row-count {
+      font-size: 11px;
+      color: var(--muted);
+      flex-shrink: 0;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .tree-columns {
+      display: none;
+      padding: 0 0 14px;
+    }
+
+    .tree-table.open .tree-columns {
+      display: block;
+    }
+
+    .tree-column {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 4px 28px 4px 38px;
+    }
+
+    .tree-column-name {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .tree-column-type {
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 0.03em;
+      text-transform: lowercase;
+      flex-shrink: 0;
+    }
+
+    /* ─── Sidebar footer ─────────────────────────────── */
+    .sidebar-footer {
+      padding: 16px 28px;
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .btn-new-upload {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 12px;
+      color: var(--muted);
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 0;
+      transition: color 0.15s ease;
+    }
+
+    .btn-new-upload:hover { color: var(--text); }
+
+    /* ─── Main area ──────────────────────────────────── */
+    #main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      height: 100dvh;
+      overflow: hidden;
+      min-width: 0;
+    }
+
+    .main-header {
+      padding: 40px 48px 0;
+      flex-shrink: 0;
+    }
+
+    .main-header h2 {
+      font-family: 'Instrument Serif', serif;
+      font-size: 24px;
+      font-weight: 400;
+      letter-spacing: -0.01em;
+      margin-bottom: 24px;
+      text-wrap: balance;
+    }
+
+    /* ─── Query bar ──────────────────────────────────── */
+    .query-bar {
+      display: flex;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      margin: 0 48px;
+      flex-shrink: 0;
+      transition: border-color 0.2s ease;
+    }
+
+    .query-bar:focus-within {
+      border-color: var(--text);
+    }
+
+    #q-input {
+      flex: 1;
+      background: none;
+      border: none;
+      outline: none;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 15px;
+      color: var(--text);
+      padding: 16px 0;
+      min-width: 0;
+    }
+
+    #q-input::placeholder {
+      color: var(--muted);
+    }
+
+    #run-btn {
+      padding: 8px 0 8px 24px;
+      background: none;
+      color: var(--muted);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: 0.02em;
+      border: none;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: color 0.15s ease;
+    }
+
+    #run-btn:hover:not(:disabled) { color: var(--accent); }
+    #run-btn:disabled { color: var(--border); cursor: not-allowed; }
+
+    /* ─── Recent questions ───────────────────────────── */
+    .history-bar {
+      display: none;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      margin: 16px 48px 0;
+    }
+
+    .history-bar.visible { display: flex; }
+
+    .history-label {
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 0.02em;
+      margin-right: 2px;
+    }
+
+    .history-chip {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 12px;
+      color: var(--muted);
+      background: none;
+      border: 1px solid var(--border);
+      padding: 5px 12px;
+      max-width: 240px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      cursor: pointer;
+      transition: border-color 0.15s ease, color 0.15s ease;
+    }
+
+    .history-chip:hover { color: var(--text); border-color: var(--muted); }
+    .history-chip:active { transform: translateY(1px); }
+    .history-chip:focus-visible { outline: 1px solid var(--accent); outline-offset: 3px; }
+
+    /* ─── SQL panel ──────────────────────────────────── */
+    .sql-panel {
+      margin: 28px 48px 0;
+      flex-shrink: 0;
+      display: none;
+    }
+
+    .sql-panel.visible { display: block; }
+
+    .sql-toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: none;
+      border: none;
+      padding: 0;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 12px;
+      color: var(--muted);
+      cursor: pointer;
+      transition: color 0.15s ease;
+    }
+
+    .sql-toggle:hover { color: var(--text); }
+
+    .sql-caret {
+      display: inline-block;
+      font-size: 11px;
+      transition: transform 0.2s ease;
+    }
+
+    .sql-panel.open .sql-caret { transform: rotate(90deg); }
+
+    .sql-code {
+      display: none;
+      margin-top: 14px;
+      padding: 4px 0 4px 20px;
+      border-left: 1px solid var(--border);
+      font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+      font-size: 12.5px;
+      color: var(--muted);
+      white-space: pre-wrap;
+      word-break: break-all;
+      line-height: 1.8;
+    }
+
+    .sql-panel.open .sql-code { display: block; }
+
+    /* ─── Results area ───────────────────────────────── */
+    #results-area {
+      flex: 1;
+      overflow-y: auto;
+      margin: 28px 48px 48px;
+      min-height: 0;
+    }
+
+    .status-msg {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .error-msg {
+      color: var(--error);
+      border-left: 1px solid var(--error);
+      padding: 10px 16px;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .result-meta {
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 0.02em;
+      margin-bottom: 16px;
+    }
+
+    /* ─── Suggested questions ────────────────────────── */
+    .suggestion-list {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 12px;
+      margin-top: 18px;
+    }
+
+    .suggestion-chip {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 13px;
+      color: var(--text);
+      background: none;
+      border: none;
+      border-bottom: 1px solid var(--border);
+      padding: 0 0 3px;
+      cursor: pointer;
+      text-align: left;
+      transition: border-color 0.15s ease, color 0.15s ease;
+    }
+
+    .suggestion-chip:hover {
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .suggestion-chip:active { transform: translateY(1px); }
+
+    .suggestion-chip:focus-visible {
+      outline: 1px solid var(--accent);
+      outline-offset: 3px;
+    }
+
+    /* ─── Results table ──────────────────────────────── */
+    .results-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .results-table thead tr {
+      border-bottom: 1px solid var(--border);
+    }
+
+    .results-table th {
+      padding: 0 24px 12px 0;
+      text-align: left;
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .results-table tbody tr {
+      border-bottom: 1px solid var(--border);
+      transition: background 0.1s;
+    }
+
+    .results-table tbody tr:hover { background: rgba(255, 255, 255, 0.025); }
+
+    .results-table td {
+      padding: 12px 24px 12px 0;
+      color: var(--text);
+      white-space: nowrap;
+      max-width: 360px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .results-table td.num {
+      font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* ─── Focus & press states ───────────────────────── */
+    .upload-browse:focus-visible,
+    button:focus-visible {
+      outline: 1px solid var(--accent);
+      outline-offset: 3px;
+    }
+
+    .upload-browse:active { opacity: 0.6; }
+
+    #run-btn:active:not(:disabled),
+    .btn-new-upload:active,
+    .sql-toggle:active {
+      transform: translateY(1px);
+    }
+
+    /* ─── Scrollbar ──────────────────────────────────── */
+    ::-webkit-scrollbar              { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track        { background: transparent; }
+    ::-webkit-scrollbar-thumb        { background: var(--border); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover  { background: var(--muted); }
+
+    /* ─── Utility ────────────────────────────────────── */
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+
+  <!-- ══════════════════════════════════════════
+       UPLOAD SCREEN
+  ══════════════════════════════════════════ -->
+  <div id="screen-upload">
+    <div class="upload-zone" id="drop-zone">
+      <h1>Query your data</h1>
+      <p>Drop a SQLite database or CSV file and ask<br />questions in plain English. Claude writes the SQL.</p>
+      <label class="upload-browse" for="file-input">Browse files</label>
+      <p class="upload-hint">.db · .sqlite · .sqlite3 · .csv</p>
+      <p class="upload-note">For best results, upload a clean file with no empty rows or duplicate entries.</p>
+      <p class="upload-error hidden" id="upload-error"></p>
+      <input type="file" id="file-input" accept=".db,.sqlite,.sqlite3,.csv" />
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════
+       QUERY SCREEN
+  ══════════════════════════════════════════ -->
+  <div id="screen-query" class="hidden">
+
+    <!-- Sidebar -->
+    <aside id="sidebar">
+      <header class="sidebar-header">
+        <div class="sidebar-db-name" id="sidebar-db-name">—</div>
+        <div class="sidebar-db-meta" id="sidebar-db-meta"></div>
+      </header>
+
+      <div class="schema-label">Schema</div>
+
+      <div class="schema-tree" id="schema-tree"></div>
+
+      <footer class="sidebar-footer">
+        <button class="btn-new-upload" id="btn-new-upload">Upload a different file</button>
+      </footer>
+    </aside>
+
+    <!-- Main area -->
+    <main id="main">
+
+      <header class="main-header">
+        <h2>Ask a question</h2>
+      </header>
+
+      <!-- Query bar -->
+      <div class="query-bar">
+        <input
+          type="text"
+          id="q-input"
+          placeholder="What do you want to know about your data?"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <button id="run-btn">Run</button>
+      </div>
+
+      <!-- Recent questions (hidden until at least one query has run) -->
+      <div class="history-bar" id="history-bar"></div>
+
+      <!-- SQL panel (hidden until first query) -->
+      <div class="sql-panel" id="sql-panel">
+        <button class="sql-toggle" id="sql-toggle">
+          Generated SQL
+          <span class="sql-caret">›</span>
+        </button>
+        <pre class="sql-code" id="sql-code"></pre>
+      </div>
+
+      <!-- Results -->
+      <section id="results-area" aria-live="polite">
+        <p class="status-msg">Schema loaded — ask anything about your database.</p>
+      </section>
+
+    </main>
+  </div>
+
+  <script>
+    // ── DOM references ──────────────────────────────────────
+    const screenUpload  = document.getElementById('screen-upload');
+    const screenQuery   = document.getElementById('screen-query');
+    const dropZone      = document.getElementById('drop-zone');
+    const fileInput     = document.getElementById('file-input');
+    const uploadError   = document.getElementById('upload-error');
+    const sidebarDbName = document.getElementById('sidebar-db-name');
+    const sidebarDbMeta = document.getElementById('sidebar-db-meta');
+    const schemaTree    = document.getElementById('schema-tree');
+    const btnNewUpload  = document.getElementById('btn-new-upload');
+    const qInput        = document.getElementById('q-input');
+    const runBtn        = document.getElementById('run-btn');
+    const historyBar    = document.getElementById('history-bar');
+    const sqlPanel      = document.getElementById('sql-panel');
+    const sqlToggle     = document.getElementById('sql-toggle');
+    const sqlCode       = document.getElementById('sql-code');
+    const resultsArea   = document.getElementById('results-area');
+
+    // ── File upload ─────────────────────────────────────────
+
+    // Drag-and-drop events on the drop zone
+    dropZone.addEventListener('dragover', e => {
+      e.preventDefault();
+      dropZone.classList.add('drag-over');
+    });
+
+    dropZone.addEventListener('dragleave', () => {
+      dropZone.classList.remove('drag-over');
+    });
+
+    dropZone.addEventListener('drop', e => {
+      e.preventDefault();
+      dropZone.classList.remove('drag-over');
+      const file = e.dataTransfer.files[0];
+      if (file) handleUpload(file);
+    });
+
+    // Clicking the browse button opens the file picker
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files[0]) handleUpload(fileInput.files[0]);
+    });
+
+    // "Upload different file" button goes back to the upload screen
+    btnNewUpload.addEventListener('click', () => {
+      screenQuery.classList.add('hidden');
+      screenUpload.classList.remove('hidden');
+      fileInput.value = '';
+    });
+
+    async function handleUpload(file) {
+      uploadError.classList.add('hidden');
+
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const res = await fetch('/upload', { method: 'POST', body: formData });
+      const data = await res.json();
+
+      if (data.error) {
+        uploadError.textContent = data.error;
+        uploadError.classList.remove('hidden');
+        return;
+      }
+
+      // Transition to query screen
+      screenUpload.classList.add('hidden');
+      screenQuery.classList.remove('hidden');
+
+      // Populate sidebar
+      const tableCount = Object.keys(data.schema).length;
+      const totalRows  = Object.values(data.schema).reduce((sum, t) => sum + t.row_count, 0);
+
+      sidebarDbName.textContent = data.filename;
+      sidebarDbMeta.textContent = `${tableCount} tables · ${totalRows.toLocaleString()} rows`;
+
+      renderSchemaTree(data.schema);
+
+      // Reset query area — a new dataset means old questions (and their
+      // schema-specific history) no longer apply
+      sqlPanel.classList.remove('visible', 'open');
+      renderSuggestions(data.suggestions);
+      renderHistory([]);
+      qInput.focus();
+    }
+
+    // ── Suggested questions ──────────────────────────────────
+
+    function renderSuggestions(suggestions) {
+      resultsArea.innerHTML = '';
+
+      const intro = document.createElement('p');
+      intro.className = 'status-msg';
+      intro.textContent = (suggestions && suggestions.length)
+        ? 'Schema loaded — try asking:'
+        : 'Schema loaded — ask anything about your database.';
+      resultsArea.appendChild(intro);
+
+      if (!suggestions || suggestions.length === 0) return;
+
+      const list = document.createElement('div');
+      list.className = 'suggestion-list';
+
+      suggestions.forEach(text => {
+        const chip = document.createElement('button');
+        chip.className = 'suggestion-chip';
+        chip.textContent = text;
+        chip.addEventListener('click', () => {
+          qInput.value = text;
+          runQuery();
+        });
+        list.appendChild(chip);
+      });
+
+      resultsArea.appendChild(list);
+    }
+
+    // ── Recent questions ──────────────────────────────────────
+
+    function renderHistory(history) {
+      historyBar.innerHTML = '';
+
+      if (!history || history.length === 0) {
+        historyBar.classList.remove('visible');
+        return;
+      }
+
+      const label = document.createElement('span');
+      label.className = 'history-label';
+      label.textContent = 'Recent:';
+      historyBar.appendChild(label);
+
+      history.forEach(text => {
+        const chip = document.createElement('button');
+        chip.className = 'history-chip';
+        chip.textContent = text;
+        chip.title = text;            // full text on hover, in case it's truncated
+        chip.addEventListener('click', () => {
+          qInput.value = text;
+          runQuery();
+        });
+        historyBar.appendChild(chip);
+      });
+
+      historyBar.classList.add('visible');
+    }
+
+    // ── Schema tree ─────────────────────────────────────────
+
+    function renderSchemaTree(schema) {
+      schemaTree.innerHTML = '';
+
+      for (const [tableName, info] of Object.entries(schema)) {
+        const tableEl = document.createElement('div');
+        tableEl.className = 'tree-table';
+
+        const header = document.createElement('div');
+        header.className = 'tree-table-header';
+        header.setAttribute('role', 'button');
+        header.setAttribute('tabindex', '0');
+        header.setAttribute('aria-expanded', 'false');
+        header.innerHTML = `
+          <span class="tree-caret">›</span>
+          <span class="tree-table-name">${tableName}</span>
+          <span class="tree-row-count">${info.row_count.toLocaleString()}</span>
+        `;
+
+        const columns = document.createElement('div');
+        columns.className = 'tree-columns';
+        for (const col of info.columns) {
+          const colEl = document.createElement('div');
+          colEl.className = 'tree-column';
+          colEl.innerHTML = `
+            <span class="tree-column-name">${col.name}</span>
+            <span class="tree-column-type">${col.type}</span>
+          `;
+          columns.appendChild(colEl);
+        }
+
+        // Toggle columns open/closed — by click or keyboard (Enter / Space)
+        const toggleTable = () => {
+          const isOpen = tableEl.classList.toggle('open');
+          header.setAttribute('aria-expanded', String(isOpen));
+        };
+        header.addEventListener('click', toggleTable);
+        header.addEventListener('keydown', e => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            toggleTable();
+          }
+        });
+
+        tableEl.appendChild(header);
+        tableEl.appendChild(columns);
+        schemaTree.appendChild(tableEl);
+      }
+    }
+
+    // ── Query ───────────────────────────────────────────────
+
+    // Run on Enter key
+    qInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') runQuery();
+    });
+
+    runBtn.addEventListener('click', runQuery);
+
+    async function runQuery() {
+      const question = qInput.value.trim();
+      if (!question) return;
+
+      // Loading state
+      runBtn.disabled = true;
+      runBtn.textContent = 'Running…';
+      resultsArea.innerHTML = `<p class="status-msg">Thinking…</p>`;
+      sqlPanel.classList.remove('visible', 'open');
+
+      const res  = await fetch('/query', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question })
+      });
+      const data = await res.json();
+
+      // Restore button
+      runBtn.disabled = false;
+      runBtn.textContent = 'Run';
+
+      // The server keeps the authoritative history list (deduplicated,
+      // newest first, capped at 10) — just redraw with whatever it sends back
+      renderHistory(data.history);
+
+      // Show SQL panel if we got any SQL back
+      if (data.sql) {
+        sqlCode.textContent = data.sql;
+        sqlPanel.classList.add('visible');
+      }
+
+      // Error state
+      if (data.error) {
+        resultsArea.innerHTML = `<div class="error-msg">${data.error}</div>`;
+        return;
+      }
+
+      // Empty results
+      if (!data.results || data.results.length === 0) {
+        resultsArea.innerHTML = `<p class="status-msg">No results found.</p>`;
+        return;
+      }
+
+      // Build table
+      const cols = Object.keys(data.results[0]);
+
+      let html = `<div class="result-meta">${data.results.length} row${data.results.length !== 1 ? 's' : ''}</div>`;
+      html += `<table class="results-table"><thead><tr>`;
+      cols.forEach(c => { html += `<th>${c}</th>`; });
+      html += `</tr></thead><tbody>`;
+
+      data.results.forEach(row => {
+        html += `<tr>`;
+        cols.forEach(c => {
+          const val = row[c] ?? '';
+          // Apply monospace class to numbers
+          const isNum = typeof row[c] === 'number';
+          html += `<td class="${isNum ? 'num' : ''}">${val}</td>`;
+        });
+        html += `</tr>`;
+      });
+
+      html += `</tbody></table>`;
+      resultsArea.innerHTML = html;
+    }
+
+    // ── SQL toggle ──────────────────────────────────────────
+
+    sqlToggle.addEventListener('click', () => {
+      sqlPanel.classList.toggle('open');
+    });
+  </script>
+</body>
+</html>
