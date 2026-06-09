@@ -259,6 +259,9 @@ async def upload_db(request: Request, response: Response, file: UploadFile = Fil
     except Exception as e:
         return {"error": f"Could not read database: {str(e)}"}
 
+    if not schema:
+        return {"error": "This database is empty — no tables were found."}
+
     suggestions = generate_suggestions(schema_to_text(schema))
 
     session["path"] = temp_path
